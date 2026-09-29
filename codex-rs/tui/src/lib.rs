@@ -198,6 +198,7 @@ mod session_resume;
 mod session_start;
 mod session_state;
 mod shortcut_help;
+mod side_pane;
 mod skills_helpers;
 mod slash_command;
 mod startup_draft;
@@ -1168,7 +1169,8 @@ async fn run_ratatui_app(
     {
         use crate::update_prompt::UpdatePromptOutcome;
 
-        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
+        let skip_update_prompt = cli.side_pane_start.is_some()
+            || cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
         if !skip_update_prompt {
             startup_draft.flush_pending_events(&mut tui).await?;
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
@@ -1286,11 +1288,12 @@ async fn run_ratatui_app(
     let requires_openai_auth = startup_account
         .as_ref()
         .is_some_and(|account| account.requires_openai_auth);
-    let should_show_onboarding = should_show_onboarding(
-        login_status,
-        requires_openai_auth,
-        should_show_trust_screen_flag,
-    );
+    let should_show_onboarding = cli.side_pane_start.is_none()
+        && should_show_onboarding(
+            login_status,
+            requires_openai_auth,
+            should_show_trust_screen_flag,
+        );
 
     let mut config = if should_show_onboarding {
         if let Err(err) = startup_draft.flush_pending_events(&mut tui).await {
@@ -1804,7 +1807,7 @@ async fn run_ratatui_app(
 
     // Remote startup keeps its existing explicit --cd trust check. Resolving other
     // remote folders requires authoritative project-root information from the server.
-    if !uses_remote_workspace || remote_cwd_override.is_some() {
+    if cli.side_pane_start.is_none() && (!uses_remote_workspace || remote_cwd_override.is_some()) {
         let resumed_thread = if matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
             && let resume_picker::SessionSelection::Resume(target) = &session_selection
         {
@@ -1965,6 +1968,7 @@ async fn run_ratatui_app(
         prompt,
         shared,
         daemon_cli_executable,
+        side_pane_start,
         ..
     } = cli;
     let images = shared.into_inner().images;
@@ -2056,6 +2060,7 @@ async fn run_ratatui_app(
         startup_draft,
         managed_worktree,
         daemon_cli_executable,
+        side_pane_start,
     ))
     .await;
 

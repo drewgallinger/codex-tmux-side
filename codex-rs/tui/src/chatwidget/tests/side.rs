@@ -413,6 +413,24 @@ async fn side_context_label_preserves_status_line_snapshot() {
 }
 
 #[tokio::test]
+async fn side_pane_context_label_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_side_conversation_active(/*active*/ true);
+    chat.set_side_conversation_context_label(Some(
+        "Side from main thread · ctrl+/ to main pane · ctrl+c to close".to_string(),
+    ));
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw side pane footer");
+    assert_chatwidget_snapshot!("side_pane_context_label", terminal.backend());
+}
+
+#[tokio::test]
 async fn side_context_label_shows_parent_status_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

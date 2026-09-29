@@ -120,6 +120,12 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        if let ServerNotificationThreadTarget::Thread(thread_id) =
+            server_notification_thread_target(&notification)
+            && self.side_pane_ignores_thread(thread_id)
+        {
+            return;
+        }
         // A picker can leave an old runtime's close notification queued while the same thread
         // is resumed. Thread IDs survive reloads, so confirm that the displayed thread is still
         // unloaded before routing a close that would exit the TUI or switch away from it.
@@ -549,6 +555,12 @@ impl App {
         app_server_client: &AppServerSession,
         request: ServerRequest,
     ) {
+        if server_request_thread_id(&request)
+            .is_some_and(|thread_id| self.side_pane_ignores_thread(thread_id))
+        {
+            // Another frontend owns this request. Rejecting would also reject it there.
+            return;
+        }
         if let ServerRequest::DynamicToolCall { request_id, params } = &request {
             if self.dynamic_tool_tasks.contains_key(request_id)
                 || (params.namespace.as_deref() != Some(crate::dynamic_tools::NAMESPACE)

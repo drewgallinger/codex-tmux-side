@@ -35,6 +35,28 @@ impl App {
         if matches!(event, AppEvent::ForkCurrentSession { .. }) {
             self.chat_widget.fork_in_progress = false;
         }
+        if self.side_pane_child.is_some()
+            && matches!(
+                &event,
+                AppEvent::NewSession { .. }
+                    | AppEvent::StartManagedWorktree { .. }
+                    | AppEvent::BrowseManagedWorktrees
+                    | AppEvent::ManagedWorktreeAction { .. }
+                    | AppEvent::OpenResumePicker
+                    | AppEvent::ResumeSessionByIdOrName(_)
+                    | AppEvent::ForkCurrentSession { .. }
+                    | AppEvent::OpenAgentPicker
+                    | AppEvent::SelectAgentThread(_)
+                    | AppEvent::OpenAgentsOverview
+                    | AppEvent::NewAgentsOverviewSession { .. }
+                    | AppEvent::NewAgentsOverviewWorktree { .. }
+                    | AppEvent::SelectAgentsOverviewThread { .. }
+            )
+        {
+            self.chat_widget
+                .add_error_message("Open another conversation from the main pane.".into());
+            return Ok(AppRunControl::Continue);
+        }
         if self.reconnect.offline
             && !matches!(
                 &event,
@@ -57,6 +79,7 @@ impl App {
                     | AppEvent::BeginThreadSwitchHistoryReplayBuffer
                     | AppEvent::EndInitialHistoryReplayBuffer
                     | AppEvent::FatalExitRequest(_)
+                    | AppEvent::SidePane { .. }
             )
         {
             return Ok(AppRunControl::Continue);
@@ -2842,6 +2865,9 @@ impl App {
                 self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await?;
             }
+            AppEvent::SidePane { launch_id, event } => {
+                self.handle_side_pane_event(app_server, launch_id, event).await;
+            }
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,
@@ -3429,6 +3455,13 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        let _ = tokio::time::timeout(SHUTDOWN_FIRST_EXIT_TIMEOUT, async {
+            self.close_side_pane(app_server).await;
+            if self.side_pane_child.is_some() {
+                self.shutdown_side_threads(app_server).await;
+            }
+        })
+        .await;
         for (request_id, (_, task)) in self.dynamic_tool_tasks.drain() {
             task.abort();
             let response = crate::dynamic_tools::failure_response(

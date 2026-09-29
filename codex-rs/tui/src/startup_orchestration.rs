@@ -11,8 +11,27 @@ pub(super) async fn run_main_inner(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
-    explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
+    mut explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    let side_target = if let Some(path) = cli.side_handoff.as_deref() {
+        let (handoff, child) =
+            crate::side_pane::SidePaneChild::read(path).map_err(std::io::Error::other)?;
+        let target = handoff.target();
+        explicit_remote_endpoint = match &target {
+            AppServerTarget::LocalDaemon { endpoint, .. }
+            | AppServerTarget::Remote { endpoint } => Some(endpoint.clone()),
+            AppServerTarget::Embedded => {
+                return Err(std::io::Error::other(
+                    "side pane requires a shared app server",
+                ));
+            }
+        };
+        cli.agents_overview = true;
+        cli.side_pane_start = Some((handoff, child));
+        Some(target)
+    } else {
+        None
+    };
     if cli.no_daemon && explicit_remote_endpoint.is_some() {
         return Err(std::io::Error::other(
             "--no-daemon cannot be used with --remote.",
@@ -104,13 +123,16 @@ pub(super) async fn run_main_inner(
     let workload_identity_selected = is_workload_identity_selected();
 
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        let validation_target = app_server_target_for_launch(
-            explicit_remote_endpoint.clone(),
-            /*default_daemon_socket*/ None,
-            /*can_reuse_implicit_local_daemon*/ false,
-            workload_identity_selected,
-            std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
-        )?;
+        let validation_target = match side_target.clone() {
+            Some(target) => target,
+            None => app_server_target_for_launch(
+                explicit_remote_endpoint.clone(),
+                /*default_daemon_socket*/ None,
+                /*can_reuse_implicit_local_daemon*/ false,
+                workload_identity_selected,
+                std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
+            )?,
+        };
         let validation_environment_manager =
             if should_load_configured_environments(&loader_overrides, &validation_target) {
                 EnvironmentManager::prepare_from_codex_home(&codex_home).await
@@ -213,13 +235,16 @@ pub(super) async fn run_main_inner(
     };
     // Local-daemon discovery does not change client config precedence. Resolve explicit
     // remote selection and the environment without opening a server connection.
-    let presentation_target = app_server_target_for_launch(
-        explicit_remote_endpoint.clone(),
-        /*default_daemon_socket*/ None,
-        reuse_implicit_local_daemon,
-        workload_identity_selected,
-        std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
-    )?;
+    let presentation_target = match side_target.clone() {
+        Some(target) => target,
+        None => app_server_target_for_launch(
+            explicit_remote_endpoint.clone(),
+            /*default_daemon_socket*/ None,
+            reuse_implicit_local_daemon,
+            workload_identity_selected,
+            std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
+        )?,
+    };
     let prepared_environment_manager =
         if should_load_configured_environments(&launch_loader_overrides, &presentation_target) {
             EnvironmentManager::prepare_from_codex_home(&codex_home).await
@@ -306,13 +331,16 @@ pub(super) async fn run_main_inner(
     } else {
         None
     };
-    let mut app_server_target = app_server_target_for_launch(
-        explicit_remote_endpoint,
-        default_daemon,
-        reuse_implicit_local_daemon,
-        workload_identity_selected,
-        std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
-    )?;
+    let mut app_server_target = match side_target.clone() {
+        Some(target) => target,
+        None => app_server_target_for_launch(
+            explicit_remote_endpoint,
+            default_daemon,
+            reuse_implicit_local_daemon,
+            workload_identity_selected,
+            std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
+        )?,
+    };
     let remote_cwd_override = cli
         .cwd
         .clone()

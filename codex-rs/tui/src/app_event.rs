@@ -370,6 +370,11 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
+    /// Report progress from the launch-owned tmux side frontend.
+    SidePane {
+        launch_id: Uuid,
+        event: crate::app::SidePaneEvent,
+    },
     /// Fork the current thread into a transient side conversation.
     StartSide {
         parent_thread_id: ThreadId,

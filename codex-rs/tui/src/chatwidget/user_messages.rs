@@ -28,7 +28,7 @@ use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
 use super::ChatWidget;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct UserMessage {
     pub(crate) text: String,
     pub(crate) local_images: Vec<LocalImageAttachment>,

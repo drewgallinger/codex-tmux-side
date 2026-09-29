@@ -4,6 +4,7 @@
 //! remains isolated from protected interactive requests until the initialized composer owns it.
 //! Queued resume history replaces the provisional loading frame only when it is ready to render.
 
+use super::event_dispatch::SHUTDOWN_FIRST_EXIT_TIMEOUT;
 use super::reconnect::ReconnectState;
 use super::*;
 use crate::session_start::SessionStartAction;
@@ -200,6 +201,10 @@ impl App {
         mut startup_draft: StartupDraftPump,
         managed_worktree: Option<crate::ManagedTuiWorktree>,
         daemon_cli_executable: Option<AbsolutePathBuf>,
+        side_pane_start: Option<(
+            crate::side_pane::SidePaneHandoff,
+            crate::side_pane::SidePaneChild,
+        )>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
 
@@ -213,6 +218,9 @@ impl App {
             Err(error.into())
         }
 
+        if side_pane_start.is_some() {
+            config.ephemeral = true;
+        }
         // Adopt actual launch ownership before constructing session-local preferences.
         tui.prepare_owned_screen(config.tui_fullscreen_transcript)?;
         let mut local_settings = crate::local_settings::LocalSettings::for_tui(&config, tui);
@@ -317,20 +325,21 @@ impl App {
         if let Err(err) = startup_draft.flush_pending_events(tui).await {
             return shutdown_on_startup_error(app_server, err).await;
         }
-        let exit_info =
-            if matches!(&session_selection, SessionSelection::Fork(_)) && config.model.is_none() {
-                None
-            } else {
-                handle_model_migration_prompt_if_needed(
-                    tui,
-                    &mut config,
-                    &local_settings,
-                    model.as_str(),
-                    &app_event_tx,
-                    &available_models,
-                )
-                .await?
-            };
+        let exit_info = if side_pane_start.is_some()
+            || (matches!(&session_selection, SessionSelection::Fork(_)) && config.model.is_none())
+        {
+            None
+        } else {
+            handle_model_migration_prompt_if_needed(
+                tui,
+                &mut config,
+                &local_settings,
+                model.as_str(),
+                &app_event_tx,
+                &available_models,
+            )
+            .await?
+        };
         if let Some(exit_info) = exit_info {
             app_server
                 .shutdown()
@@ -852,6 +861,9 @@ See the Codex keymap documentation for supported actions and examples."
             agent_navigation: AgentNavigationState::default(),
             agents_overview: Default::default(),
             side_threads: HashMap::new(),
+            side_pane: None,
+            side_pane_child: None,
+            side_pane_ignored_threads: HashSet::new(),
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -900,7 +912,7 @@ See the Codex keymap documentation for supported actions and examples."
                 /*server_version*/ None,
             );
         }
-        if start_in_agents_overview {
+        if start_in_agents_overview && side_pane_start.is_none() {
             app.open_agents_overview(&app_server);
         } else if !matches!(app.app_server_target, AppServerTarget::Embedded) {
             app.refresh_agents_overview_threads(&app_server);
@@ -960,6 +972,15 @@ See the Codex keymap documentation for supported actions and examples."
             app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_server_version_warning(notice.clone()),
             )));
+        }
+        if let Some((handoff, child)) = side_pane_start {
+            if let Err(err) = app
+                .start_side_pane_child(tui, &mut app_server, handoff, child.clone())
+                .await
+            {
+                let _ = child.failed(&err.to_string());
+                return shutdown_on_startup_error(app_server, err).await;
+            }
         }
         let initial_session_ms = initial_session_started_at.elapsed().as_millis();
 
@@ -1328,6 +1349,11 @@ See the Codex keymap documentation for supported actions and examples."
                 }
             }
         };
+        let _ = tokio::time::timeout(
+            SHUTDOWN_FIRST_EXIT_TIMEOUT,
+            app.shutdown_side_threads(&mut app_server),
+        )
+        .await;
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }

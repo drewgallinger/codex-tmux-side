@@ -265,7 +265,8 @@ impl App {
         self.chat_widget
             .set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Suppress);
         let mut label_parts = Vec::new();
-        let parent_is_main = self.primary_thread_id == Some(parent_thread_id);
+        let parent_is_main =
+            self.side_pane_child.is_some() || self.primary_thread_id == Some(parent_thread_id);
         if parent_is_main {
             label_parts.push("from main thread".to_string());
         } else {
@@ -279,7 +280,12 @@ impl App {
             crate::keymap::KeymapContext::Global,
             "toggle_side_conversation",
         ) {
-            label_parts.push(format!("{} to switch", binding.display_label()));
+            let action = if self.side_pane_child.is_some() {
+                "to main pane"
+            } else {
+                "to switch"
+            };
+            label_parts.push(format!("{} {action}", binding.display_label()));
         }
         label_parts.push("ctrl+c to close".to_string());
         self.chat_widget
@@ -361,6 +367,11 @@ impl App {
             && self.chat_widget.composer_is_empty()
             && let Some(parent_thread_id) = self.active_side_parent_thread_id()
         {
+            if self.side_pane_child.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                return true;
+            }
             if self
                 .select_agent_thread_and_discard_side(tui, app_server, parent_thread_id)
                 .await
@@ -393,6 +404,16 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
     ) -> Result<()> {
+        if let Some(child) = &self.side_pane_child {
+            return child.focus_parent().await;
+        }
+        if let Some(launch) = self
+            .side_pane
+            .as_ref()
+            .and_then(|state| state.launch.as_ref())
+        {
+            return launch.focus().await;
+        }
         let Some(active_thread_id) = self.current_displayed_thread_id() else {
             return Ok(());
         };
@@ -671,6 +692,9 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         let side_thread_to_discard = self.side_thread_to_discard_after_switch(thread_id);
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            self.close_side_pane(app_server).await;
+        }
         self.select_agent_thread(tui, app_server, thread_id).await?;
         if self.active_thread_id == Some(thread_id)
             && let Some(side_thread_id) = side_thread_to_discard
@@ -720,6 +744,14 @@ impl App {
         );
         self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
             .await;
+
+        if !matches!(self.app_server_target, AppServerTarget::Embedded)
+            && let Some(source_pane) = crate::side_pane::source_pane()
+        {
+            self.start_side_pane(app_server, parent_thread_id, user_message, source_pane)
+                .await;
+            return Ok(AppRunControl::Continue);
+        }
 
         let fork_config = self.side_fork_config();
         match app_server

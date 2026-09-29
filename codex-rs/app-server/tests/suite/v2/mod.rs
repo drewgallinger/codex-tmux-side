@@ -121,6 +121,8 @@ mod selected_environment;
 mod server_diagnostics;
 #[cfg(not(target_os = "windows"))]
 mod session_end;
+#[path = "side_conversation_websocket_tests.rs"]
+mod side_conversation_websocket;
 mod skills_list;
 mod sleep;
 mod thread_archive;

@@ -50,6 +50,7 @@ impl App {
     }
 
     pub(super) async fn shutdown_side_threads(&mut self, app_server: &mut AppServerSession) {
+        self.close_side_pane(app_server).await;
         let side_thread_ids: Vec<ThreadId> = self.side_threads.keys().copied().collect();
         for side_thread_id in side_thread_ids {
             self.discard_side_thread(app_server, side_thread_id).await;
@@ -1600,7 +1601,11 @@ impl App {
             ThreadAttachPresentation::Fresh
             | ThreadAttachPresentation::FreshWithDraft
             | ThreadAttachPresentation::SessionLineage => {
-                self.chat_widget.handle_thread_session(session);
+                if self.side_threads.contains_key(&thread_id) {
+                    self.chat_widget.handle_side_thread_session(session);
+                } else {
+                    self.chat_widget.handle_thread_session(session);
+                }
             }
         }
         let should_buffer_initial_replay = !turns.is_empty();

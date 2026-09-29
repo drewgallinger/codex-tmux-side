@@ -118,13 +118,13 @@ mod bottom_pane_view;
 mod composer_gap;
 mod effort_ignition;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LocalImageAttachment {
     pub(crate) placeholder: String,
     pub(crate) path: PathBuf,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct MentionBinding {
     /// Visible mention sigil (`$` or `@`).
     pub(crate) sigil: char,

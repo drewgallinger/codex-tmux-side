@@ -13,6 +13,16 @@ pub struct Cli {
     #[clap(skip)]
     pub daemon_cli_executable: Option<AbsolutePathBuf>,
 
+    /// Internal: private tmux side conversation handoff.
+    #[arg(long, hide = true)]
+    pub side_handoff: Option<std::path::PathBuf>,
+
+    #[clap(skip)]
+    pub(crate) side_pane_start: Option<(
+        crate::side_pane::SidePaneHandoff,
+        crate::side_pane::SidePaneChild,
+    )>,
+
     /// Optional user prompt to start the session.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,

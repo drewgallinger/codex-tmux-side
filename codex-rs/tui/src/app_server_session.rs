@@ -880,17 +880,47 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
-        self.fork_thread_at_with_presentation(
+        let params = self.side_fork_params(config.clone(), thread_id);
+        self.fork_side_thread_with_params(local_settings, config, params)
+            .await
+    }
+
+    pub(crate) fn side_fork_params(&self, config: Config, thread_id: ThreadId) -> ThreadForkParams {
+        let session_config = if config.model.is_none() {
+            config.clone()
+        } else {
+            self.session_config_with_effective_service_tier(&config)
+        };
+        let mut params = thread_fork_params_from_config(
+            session_config,
+            thread_id,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+        );
+        params.model_provider = Some(config.model_provider_id.clone());
+        params.runtime_workspace_roots = Some(config.workspace_roots.clone());
+        params.exclude_turns = self.history_support == ThreadHistorySupport::Paginated;
+        if self.thread_params_mode() == ThreadParamsMode::Remote {
+            params.approval_policy = None;
+            params.approvals_reviewer = None;
+            params.sandbox = None;
+            params.permissions = None;
+            remove_permission_config_overrides(&mut params.config);
+        }
+        params
+    }
+
+    pub(crate) async fn fork_side_thread_with_params(
+        &mut self,
+        local_settings: &LocalSettings,
+        config: Config,
+        params: ThreadForkParams,
+    ) -> Result<AppServerStartedThread> {
+        self.send_fork_request(
             local_settings,
             config,
-            thread_id,
-            /*last_turn_id*/ None,
-            /*before_turn_id*/ None,
-            ForkGoalContinuation::StartIfIdle,
+            params,
             ForkPresentation::SideConversation,
-            /*selected_profile*/ None,
-            ForkPermissionMode::InheritSaved,
-            ForkConfigSource::Session,
         )
         .await
     }
@@ -924,7 +954,6 @@ impl AppServerSession {
                 .as_ref()
                 .is_some_and(|thread| thread.history_mode == ThreadHistoryMode::Paginated)
                 || presentation == ForkPresentation::SideConversation);
-        let request_id = self.next_request_id();
         let session_config = if config.model.is_none() {
             // Avoid inferring a tier from the stale client default model.
             config.clone()
@@ -971,6 +1000,22 @@ impl AppServerSession {
             params.approvals_reviewer = selected_profile.approvals_reviewer.map(Into::into);
             remove_permission_config_overrides(&mut params.config);
         }
+        let mut started = self
+            .send_fork_request(local_settings, config, params, presentation)
+            .await?;
+        started.session.fork_parent_title = fork_parent.and_then(|thread| thread.name);
+        Ok(started)
+    }
+
+    async fn send_fork_request(
+        &mut self,
+        local_settings: &LocalSettings,
+        config: Config,
+        mut params: ThreadForkParams,
+        presentation: ForkPresentation,
+    ) -> Result<AppServerStartedThread> {
+        let thread_id = ThreadId::from_string(&params.thread_id)?;
+        let request_id = self.next_request_id();
         self.thread_tool_transport()
             .configure_mcp(&mut params.config);
         let response: ThreadForkResponse = match self
@@ -1029,7 +1074,6 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
-        started.session.fork_parent_title = fork_parent.and_then(|thread| thread.name);
         if self.task_tools_available(thread_id) {
             started.task_tools_available = true;
             self.remember_task_tool_thread(started.session.thread_id);
@@ -3916,10 +3960,15 @@ mod tests {
         let regular = app_server
             .fork_thread(&LocalSettings::from(&config), config.clone(), thread_id)
             .await?;
+        let mut parent_config = config.clone();
+        parent_config.model_reasoning_effort = Some(ReasoningEffort::High);
+        let params = app_server.side_fork_params(parent_config, thread_id);
+        let params = serde_json::from_value(serde_json::to_value(params)?)?;
         let side = app_server
-            .fork_side_thread(&LocalSettings::from(&config), config, thread_id)
+            .fork_side_thread_with_params(&LocalSettings::from(&config), config, params)
             .await?;
 
+        assert_eq!(side.session.reasoning_effort, Some(ReasoningEffort::High));
         assert_eq!(regular.turns.len(), 1);
         assert!(matches!(
             regular.turns[0].items.as_slice(),

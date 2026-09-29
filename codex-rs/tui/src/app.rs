@@ -257,6 +257,7 @@ mod server_version_notice;
 mod session_lifecycle;
 mod session_picker;
 mod side;
+mod side_pane;
 mod startup;
 mod startup_prompts;
 mod startup_warnings;
@@ -288,6 +289,7 @@ use self::platform_actions::*;
 use self::side::SideParentStatus;
 use self::side::SideParentStatusChange;
 use self::side::SideThreadState;
+pub(crate) use self::side_pane::SidePaneEvent;
 use self::startup_prompts::*;
 use self::thread_events::*;
 
@@ -622,6 +624,9 @@ pub(crate) struct App {
     agent_navigation: AgentNavigationState,
     agents_overview: agents_overview::AgentsOverviewState,
     side_threads: HashMap<ThreadId, SideThreadState>,
+    side_pane: Option<side_pane::SidePaneState>,
+    side_pane_child: Option<crate::side_pane::SidePaneChild>,
+    side_pane_ignored_threads: HashSet<ThreadId>,
     abandoned_side_threads: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,

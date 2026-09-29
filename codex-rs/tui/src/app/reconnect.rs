@@ -175,6 +175,20 @@ impl App {
     }
 
     pub(super) fn begin_reconnect(&mut self) -> bool {
+        if self.side_pane_child.is_some() {
+            self.app_event_tx.send(AppEvent::FatalExitRequest(
+                "Side conversation closed because the server connection was lost.".into(),
+            ));
+            return true;
+        }
+        if self.side_pane.is_some() {
+            self.app_event_tx.send(AppEvent::SidePane {
+                launch_id: self.side_pane.as_ref().expect("side pane").launch_id,
+                event: side_pane::SidePaneEvent::Failed(
+                    "Side conversation closed because the server connection was lost.".into(),
+                ),
+            });
+        }
         if matches!(self.app_server_target, AppServerTarget::Embedded) {
             return false;
         }

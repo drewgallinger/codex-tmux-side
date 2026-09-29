@@ -3613,6 +3613,17 @@ impl ThreadRequestProcessor {
         let mut raw_events_enabled = false;
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
+            // Side panes subscribe through their own fork request. Attaching other
+            // frontends duplicates approvals and keeps abandoned ephemeral forks alive.
+            if config_snapshot.ephemeral
+                && matches!(
+                    config_snapshot.thread_source.as_ref(),
+                    Some(codex_protocol::protocol::ThreadSource::Feature(feature))
+                        if feature == "side_conversation"
+                )
+            {
+                return;
+            }
             self.thread_watch_manager
                 .upsert_thread(&thread_id.to_string())
                 .await;
@@ -5270,19 +5281,36 @@ impl ThreadRequestProcessor {
         let instruction_sources = forked_thread.legacy_instruction_sources().await;
 
         // Auto-attach a conversation listener when forking a thread.
-        log_listener_attach_result(
-            self.ensure_conversation_listener(
+        let listener_result = self
+            .ensure_conversation_listener(
                 thread_id,
                 request_id.connection_id,
                 /*raw_events_enabled*/ false,
             )
-            .await,
+            .await;
+        let config_snapshot = forked_thread.config_snapshot().await;
+        if matches!(
+            listener_result,
+            Ok(EnsureConversationListenerResult::ConnectionClosed)
+        ) && config_snapshot.ephemeral
+            && matches!(
+                config_snapshot.thread_source.as_ref(),
+                Some(codex_protocol::protocol::ThreadSource::Feature(feature))
+                    if feature == "side_conversation"
+            )
+        {
+            self.prepare_thread_for_removal(thread_id, "close abandoned side conversation")
+                .await?;
+            return Err(invalid_request(
+                "side conversation owner disconnected during fork",
+            ));
+        }
+        log_listener_attach_result(
+            listener_result,
             thread_id,
             request_id.connection_id,
             "thread",
         );
-
-        let config_snapshot = forked_thread.config_snapshot().await;
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so their visible history is projected before the source history is consumed.
